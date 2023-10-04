@@ -1,7 +1,6 @@
 #!/bin/zsh
 
-docker build -t wav2lip:latest .
-
+docker build -t wav2lip:latest . && \
 docker run -it --rm \
  -v $(pwd):/workspace/Wav2Lip \
  --user $(id -u):$(id -g) \
