@@ -156,9 +156,7 @@ def face_detect(images):
                 )
         except RuntimeError:
             if batch_size == 1:
-                raise RuntimeError(
-                    "Image too big to run face detection on GPU. Please use the --resize_factor argument"
-                )
+                raise
             batch_size //= 2
             print("Recovering from OOM error; New batch size: {}".format(batch_size))
             continue

@@ -1,6 +1,10 @@
 #!/bin/bash
 
 python inference.py \
- --checkpoint_path ./checkpoints/wav2lip_gam.pth \
- --face ./data/dictator_orig.mp4 \
- --audio ./data/dictator_audio_extracted.wav
+ --checkpoint_path ./checkpoints/wav2lip_gan.pth \
+ --face ./data/netan.mp4 \
+ --audio ./data/stih_elevenlabs.wav \
+# --face_det_batch_size 1 \
+# --wav2lip_batch_size 1 \
+# --resize_factor 4
+#--face ./data/dictator_orig.mp4 \
