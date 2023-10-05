@@ -15,6 +15,10 @@ RUN apt-get install -y llvm-8 llvm-8-dev libedit-dev build-essential
 
 COPY requirements.txt requirements.txt
 RUN LLVM_CONFIG=/usr/bin/llvm-config-8 pip install -r requirements.txt
+RUN pip install easydict Cython
+RUN pip install cython_bbox loguru scikit-image tqdm Pillow thop ninja tabulate lap motmetrics filterpy h5py
+
+RUN git clone https://github.com/ifzhang/ByteTrack.git && cd ByteTrack && pip install .
 
 ENV NUMBA_CACHE_DIR=/tmp
 

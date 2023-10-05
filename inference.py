@@ -6,6 +6,7 @@ import random
 import string
 import subprocess
 import sys
+from collections import defaultdict
 from glob import glob
 from os import listdir, path
 
@@ -18,6 +19,10 @@ from tqdm import tqdm
 import audio
 import face_detection
 from models import Wav2Lip
+
+np.float = float
+from easydict import EasyDict
+from yolox.tracker.byte_tracker import BYTETracker
 
 parser = argparse.ArgumentParser(
     description="Inference code to lip-sync videos in the wild using Wav2Lip models"
@@ -49,12 +54,12 @@ parser.add_argument(
     default="results/result_voice.mp4",
 )
 
-parser.add_argument(
-    "--static",
-    type=bool,
-    help="If True, then use only first video frame for inference",
-    default=False,
-)
+# parser.add_argument(
+#     "--static",
+#     type=bool,
+#     help="If True, then use only first video frame for inference",
+#     default=False,
+# )
 parser.add_argument(
     "--fps",
     type=float,
@@ -97,14 +102,14 @@ parser.add_argument(
     "Useful if multiple face present. -1 implies the value will be auto-inferred based on height, width",
 )
 
-parser.add_argument(
-    "--box",
-    nargs="+",
-    type=int,
-    default=[-1, -1, -1, -1],
-    help="Specify a constant bounding box for the face. Use only as a last resort if the face is not detected."
-    "Also, might work only if the face is not moving around much. Syntax: (top, bottom, left, right).",
-)
+# parser.add_argument(
+#     "--box",
+#     nargs="+",
+#     type=int,
+#     default=[-1, -1, -1, -1],
+#     help="Specify a constant bounding box for the face. Use only as a last resort if the face is not detected."
+#     "Also, might work only if the face is not moving around much. Syntax: (top, bottom, left, right).",
+# )
 
 parser.add_argument(
     "--rotate",
@@ -114,12 +119,12 @@ parser.add_argument(
     "Use if you get a flipped result, despite feeding a normal looking video",
 )
 
-parser.add_argument(
-    "--nosmooth",
-    default=False,
-    action="store_true",
-    help="Prevent smoothing face detections over a short temporal window",
-)
+# parser.add_argument(
+#     "--nosmooth",
+#     default=False,
+#     action="store_true",
+#     help="Prevent smoothing face detections over a short temporal window",
+# )
 
 args = parser.parse_args()
 args.img_size = 96
@@ -145,68 +150,79 @@ def face_detect(images):
 
     batch_size = args.face_det_batch_size
 
-    while 1:
-        predictions = []
-        try:
-            for i in tqdm(range(0, len(images), batch_size)):
-                predictions.extend(
-                    detector.get_detections_for_batch(
-                        np.array(images[i : i + batch_size])
-                    )
-                )
-        except RuntimeError:
-            if batch_size == 1:
-                raise
-            batch_size //= 2
-            print("Recovering from OOM error; New batch size: {}".format(batch_size))
-            continue
-        break
+    predictions = []
+    for i in tqdm(range(0, len(images), batch_size)):
+        bboxes = detector.get_detections_for_batch(np.array(images[i : i + batch_size]))
+        predictions.extend(bboxes)
 
-    results = []
     pady1, pady2, padx1, padx2 = args.pads
-    for rect, image in zip(predictions, images):
-        if rect is None:
-            cv2.imwrite(
-                "temp/faulty_frame.jpg", image
-            )  # check this frame where the face was not detected.
-            raise ValueError(
-                "Face not detected! Ensure the video contains a face in all the frames."
+    result = list()
+    for list_of_rects, image in zip(predictions, images):
+        current_frame_results = list()
+        for rect in list_of_rects:
+            rect[1] = y1 = max(0, rect[1] - pady1)
+            rect[3] = y2 = min(image.shape[0], rect[3] + pady2)
+            rect[0] = x1 = max(0, rect[0] - padx1)
+            rect[2] = x2 = min(image.shape[1], rect[2] + padx2)
+            rect[4] = c = rect[-1]
+            current_frame_results.append((x1, y1, x2, y2, c))
+        result.append(EasyDict(img=image, bboxes=current_frame_results))
+
+    return result
+
+
+def tracker(face_det_results, size):
+    args = EasyDict(
+        track_thresh=0.6,
+        track_buffer=30,
+        match_thresh=0.9,
+        min_box_area=100,
+        mot20=False,
+    )
+    tracker = BYTETracker(args)
+    tracker_results = defaultdict(list)
+    for frame_i, current_frame_results in enumerate(face_det_results):
+        img, bboxes = current_frame_results.img, current_frame_results.bboxes
+        if len(bboxes) == 0:
+            continue
+        online_targets = tracker.update(np.array(bboxes), size, size)
+        for online_target in online_targets:
+            x1, y1, x2, y2 = online_target.tlbr
+            score = online_target.score
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            tracker_results[online_target.track_id].append(
+                EasyDict(
+                    crop=img[y1:y2, x1:x2, :],
+                    frame_i=frame_i,
+                    x1=x1,
+                    x2=x2,
+                    y1=y1,
+                    y2=y2,
+                    score=score,
+                )
             )
 
-        y1 = max(0, rect[1] - pady1)
-        y2 = min(image.shape[0], rect[3] + pady2)
-        x1 = max(0, rect[0] - padx1)
-        x2 = min(image.shape[1], rect[2] + padx2)
-
-        results.append([x1, y1, x2, y2])
-
-    boxes = np.array(results)
-    if not args.nosmooth:
-        boxes = get_smoothened_boxes(boxes, T=5)
-    results = [
-        [image[y1:y2, x1:x2], (y1, y2, x1, x2)]
-        for image, (x1, y1, x2, y2) in zip(images, boxes)
-    ]
-
-    del detector
-    return results
+    return tracker_results
 
 
 def datagen(frames, mels):
     img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
+    face_det_results = face_detect(frames)  # BGR2RGB for CNN face detection
+    tracker_results = tracker(
+        face_det_results, (frames[0].shape[1], frames[0].shape[0])
+    )
 
-    if args.box[0] == -1:
-        if not args.static:
-            face_det_results = face_detect(frames)  # BGR2RGB for CNN face detection
-        else:
-            face_det_results = face_detect([frames[0]])
-    else:
-        print("Using the specified bounding box instead of face detection...")
-        y1, y2, x1, x2 = args.box
-        face_det_results = [[f[y1:y2, x1:x2], (y1, y2, x1, x2)] for f in frames]
+    # face_det_results = tracker_results[1] # choose first track
+    # face_det_results = [[t.crop, (t.y1, t.y2, t.x1, t.x2, t.score)] for t in face_det_results]
+
+    face_det_results = list()
+    for i in range(len(tracker_results[1])):  # alternate tracks every 100 frames
+        speaker_id = 1 if i % 200 < 100 else 2
+        t = tracker_results[speaker_id][i]
+        face_det_results.append([t.crop, (t.y1, t.y2, t.x1, t.x2, t.score)])
 
     for i, m in enumerate(mels):
-        idx = 0 if args.static else i % len(frames)
+        idx = i % len(frames)
         frame_to_save = frames[idx].copy()
         face, coords = face_det_results[idx].copy()
 
@@ -376,7 +392,15 @@ def main():
         pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.0
 
         for p, f, c in zip(pred, frames, coords):
-            y1, y2, x1, x2 = c
+            y1, y2, x1, x2, confidence = c
+            if True:  # plot bbox for debug
+                cv2.rectangle(
+                    f,
+                    (round(x1), round(y1)),
+                    (round(x2), round(y2)),
+                    color=(255, 0, 255),
+                    thickness=3,
+                )
             p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
 
             f[y1:y2, x1:x2] = p
