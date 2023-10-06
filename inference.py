@@ -10,15 +10,14 @@ from collections import defaultdict
 from glob import glob
 from os import listdir, path
 
+import audio
 import cv2
+import face_detection
 import numpy as np
 import scipy
 import torch
-from tqdm import tqdm
-
-import audio
-import face_detection
 from models import Wav2Lip
+from tqdm import tqdm
 
 np.float = float
 from easydict import EasyDict
@@ -180,7 +179,7 @@ def tracker(face_det_results, size):
         mot20=False,
     )
     tracker = BYTETracker(args)
-    tracker_results = defaultdict(list)
+    tracker_results = defaultdict(dict)
     for frame_i, current_frame_results in enumerate(face_det_results):
         img, bboxes = current_frame_results.img, current_frame_results.bboxes
         if len(bboxes) == 0:
@@ -190,16 +189,14 @@ def tracker(face_det_results, size):
             x1, y1, x2, y2 = online_target.tlbr
             score = online_target.score
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            tracker_results[online_target.track_id].append(
-                EasyDict(
-                    crop=img[y1:y2, x1:x2, :],
-                    frame_i=frame_i,
-                    x1=x1,
-                    x2=x2,
-                    y1=y1,
-                    y2=y2,
-                    score=score,
-                )
+            tracker_results[online_target.track_id][frame_i] = EasyDict(
+                crop=img[y1:y2, x1:x2, :],
+                frame_i=frame_i,
+                x1=x1,
+                x2=x2,
+                y1=y1,
+                y2=y2,
+                score=score,
             )
 
     return tracker_results
@@ -207,18 +204,31 @@ def tracker(face_det_results, size):
 
 def datagen(frames, mels):
     img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
+
     face_det_results = face_detect(frames)  # BGR2RGB for CNN face detection
     tracker_results = tracker(
         face_det_results, (frames[0].shape[1], frames[0].shape[0])
     )
-
-    # face_det_results = tracker_results[1] # choose first track
-    # face_det_results = [[t.crop, (t.y1, t.y2, t.x1, t.x2, t.score)] for t in face_det_results]
+    print(
+        tracker_results.keys(),
+        [len(tracker_results[k]) for k in tracker_results.keys()],
+    )
 
     face_det_results = list()
-    for i in range(len(tracker_results[1])):  # alternate tracks every 100 frames
-        speaker_id = 1 if i % 200 < 100 else 2
-        t = tracker_results[speaker_id][i]
+    for i in range(len(frames)):
+        fps = 30
+
+        # here we set active track_id based on time
+        if fps * 7 < i < fps * 14 or i > fps * 44:
+            speaker_id = 1
+        else:
+            speaker_id = 2
+
+        # ugly hack to make this repo work with frames without detects
+        t = tracker_results[speaker_id].get(
+            i, EasyDict(crop=np.zeros([2, 2, 3]), x1=1, x2=3, y1=1, y2=3, score=1.0)
+        )
+
         face_det_results.append([t.crop, (t.y1, t.y2, t.x1, t.x2, t.score)])
 
     for i, m in enumerate(mels):

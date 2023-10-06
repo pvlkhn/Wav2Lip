@@ -4,18 +4,17 @@ import random
 from glob import glob
 from os.path import basename, dirname, isfile, join
 
+import audio
 import cv2
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-from torch import nn, optim
-from torch.utils import data as data_utils
-from tqdm import tqdm
-
-import audio
 from hparams import get_image_list, hparams
 from models import SyncNet_color as SyncNet
 from models import Wav2Lip as Wav2Lip
+from torch import nn, optim
+from torch.utils import data as data_utils
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(
     description="Code to train the Wav2Lip model without the visual quality discriminator"

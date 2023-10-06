@@ -19,13 +19,12 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from glob import glob
 
-import cv2
-import numpy as np
-from tqdm import tqdm
-
 import audio
+import cv2
 import face_detection
+import numpy as np
 from hparams import hparams as hp
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
 

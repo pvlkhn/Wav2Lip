@@ -49,7 +49,7 @@ class SFDDetector(FaceDetector):
         bboxlists = batch_detect(self.face_detector, images, device=self.device)
         keeps = [nms(bboxlists[:, i, :], 0.3) for i in range(bboxlists.shape[1])]
         bboxlists = [bboxlists[keep, i, :] for i, keep in enumerate(keeps)]
-        bboxlists = [[x for x in bboxlist if x[-1] > 0.5] for bboxlist in bboxlists]
+        bboxlists = [[x for x in bboxlist if x[-1] > 0.3] for bboxlist in bboxlists]
 
         return bboxlists
 
