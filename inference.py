@@ -22,6 +22,18 @@ from tqdm import tqdm
 np.float = float
 from easydict import EasyDict
 from yolox.tracker.byte_tracker import BYTETracker
+import dlib 
+
+LANDMARKS_RANGES = {
+    "outer": {
+        "upper": range(49, 54),
+        "lower": range(55, 60)
+    }, 
+    "inner": {
+        "upper": range(61, 64),
+        "lower": range(65, 68)
+    }
+}
 
 parser = argparse.ArgumentParser(
     description="Inference code to lip-sync videos in the wild using Wav2Lip models"
@@ -191,7 +203,6 @@ def tracker(face_det_results, size):
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             tracker_results[online_target.track_id][frame_i] = EasyDict(
                 crop=img[y1:y2, x1:x2, :],
-                frame_i=frame_i,
                 x1=x1,
                 x2=x2,
                 y1=y1,
@@ -202,6 +213,52 @@ def tracker(face_det_results, size):
     return tracker_results
 
 
+def get_speaking_scores(frames, tracker_results, momentum=0.5):
+    predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat") 
+    scores = []
+    prev_distances = {}
+     
+    face_tracks = [{} for _ in frames]
+    for speaker, tack in tracker_results.items():
+        for frame_idx, frame in tack.items():
+            face_tracks[frame_idx][speaker] = dlib.rectangle(frame["x1"], frame["y1"], frame["x2"], frame["y2"])
+
+    for frame, face_bboxes in zip(frames, face_tracks):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame_scores = {}
+        new_distances = {}
+        for speaker_idx, face_bbox in face_bboxes.items():
+            landmarks = predictor(gray, face_bbox)
+            points = {}
+            for side in ["outer", "inner"]:
+                for lip in ["lower", "upper"]:
+                    lip_range = LANDMARKS_RANGES[side][lip]
+                    points[side, lip] =  np.array([[landmarks.part(i).x, landmarks.part(i).y] for i in lip_range])
+            
+            outer_dist = ((points["outer", "upper"] - points["outer", "lower"]) ** 2).mean()
+            inner_dist = ((points["inner", "upper"] - points["inner", "lower"]) ** 2).mean()                                       
+            
+            prev_speaker_dists = prev_distances.get(speaker_idx)
+            if prev_speaker_dists is not None:
+                prev_outer_dist, prev_inner_dist = prev_speaker_dists
+                score = (outer_dist - prev_outer_dist) ** 2 + (inner_dist - prev_inner_dist) ** 2     
+            else:
+                score = 0
+  
+            frame_scores[speaker_idx] = score
+            new_distances[speaker_idx] = outer_dist, inner_dist
+        prev_distances = new_distances
+        if len(scores) > 0 and momentum > 0:
+            momentum_frame_scores = {}
+            for speaker_idx, cur_score in frame_scores.items():
+                prev_score = scores[-1].get(speaker_idx, 0)
+                momentum_frame_scores[speaker_idx] = momentum * prev_score +  (1 - momentum) * cur_score
+            frame_scores = momentum_frame_scores  
+        
+        scores.append(frame_scores)
+    return scores
+
+
 def datagen(frames, mels):
     img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
 
@@ -209,26 +266,16 @@ def datagen(frames, mels):
     tracker_results = tracker(
         face_det_results, (frames[0].shape[1], frames[0].shape[0])
     )
-    print(
-        tracker_results.keys(),
-        [len(tracker_results[k]) for k in tracker_results.keys()],
-    )
+    scores = get_speaking_scores(frames, tracker_results)
 
     face_det_results = list()
-    for i in range(len(frames)):
-        fps = 30
-
-        # here we set active track_id based on time
-        if fps * 7 < i < fps * 14 or i > fps * 44:
-            speaker_id = 1
-        else:
-            speaker_id = 2
-
-        # ugly hack to make this repo work with frames without detects
-        t = tracker_results[speaker_id].get(
-            i, EasyDict(crop=np.zeros([2, 2, 3]), x1=1, x2=3, y1=1, y2=3, score=1.0)
-        )
-
+    for i, frame_speaker_scores in enumerate(scores):
+        if len(frame_speaker_scores) > 0:
+            speaking_speaker_idx = max(frame_speaker_scores, key=frame_speaker_scores.get)
+            t = tracker_results[speaking_speaker_idx][i]
+        else: 
+            # ugly hack to make this repo work with frames without detects
+            t = EasyDict(crop=np.zeros([2, 2, 3]), x1=1, x2=3, y1=1, y2=3, score=1.0)
         face_det_results.append([t.crop, (t.y1, t.y2, t.x1, t.x2, t.score)])
 
     for i, m in enumerate(mels):
