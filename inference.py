@@ -213,7 +213,7 @@ def tracker(face_det_results, size):
     return tracker_results
 
 
-def get_speaking_scores(frames, tracker_results, momentum=0.5):
+def get_speaking_scores(frames, tracker_results, momentum=0.999):
     predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat") 
     scores = []
     prev_distances = {}
@@ -241,7 +241,7 @@ def get_speaking_scores(frames, tracker_results, momentum=0.5):
             prev_speaker_dists = prev_distances.get(speaker_idx)
             if prev_speaker_dists is not None:
                 prev_outer_dist, prev_inner_dist = prev_speaker_dists
-                score = (outer_dist - prev_outer_dist) ** 2 + (inner_dist - prev_inner_dist) ** 2     
+                score = (outer_dist - prev_outer_dist) ** 2 
             else:
                 score = 0
   
